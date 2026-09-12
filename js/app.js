@@ -355,7 +355,7 @@ function setControlsEnabled(enabled) {
   inputAlarmHigh.disabled = !enabled;
   selectScreenOff.disabled = !enabled;
   selectDeviceTempUnit.disabled = !enabled;
-  btnFetchHistory.disabled = !enabled || ble.isFetchingHistory;
+  btnFetchHistory.disabled = ble.isFetchingHistory;
 }
 
 function updateBuzzerUI(enabled) {
@@ -562,9 +562,19 @@ function updateDeviceInfoUI(info) {
 // ------------------------------------------------------------- History, Chart & CSV
 
 async function fetchDeviceHistoryHandler() {
+  if (ble.isFetchingHistory) return;
+
+  // Auto-connect if device is not connected yet
   if (ble.state !== BLE_STATES.CONNECTED) {
-    showToast('⚠️ Прилад не підключено');
-    return;
+    try {
+      showToast('📡 Оберіть ваш HTRAM у списку Bluetooth для зчитування історії...', 4000);
+      await ble.connect(chkAcceptAll.checked);
+    } catch (err) {
+      if (err.name !== 'NotFoundError') {
+        showToast(`Помилка підключення: ${err.message}`, 5000);
+      }
+      return;
+    }
   }
 
   btnFetchHistory.disabled = true;
@@ -610,7 +620,7 @@ async function fetchDeviceHistoryHandler() {
       showToast(`Помилка зчитування пам'яті: ${err.message}`, 6000);
     }
   } finally {
-    btnFetchHistory.disabled = (ble.state !== BLE_STATES.CONNECTED);
+    btnFetchHistory.disabled = false;
     btnAbortHistory.style.display = 'none';
     historyProgressWrap.style.display = 'none';
     historyAbortController = null;

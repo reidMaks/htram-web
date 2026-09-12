@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>HTRAM Web Configurator & Monitor 🇺🇦</title>
   <meta name="description" content="Автономний веб-конфігуратор датчика Honeywell HTRAM через Web Bluetooth API. Вимкнення зумера, синхронізація часу та моніторинг CO2.">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=1.1.1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%20%22100%22%20%22100%22><text y=%22.9em%22 font-size=%2290%22>🍃</text></svg>">
 </head>
 <body>
@@ -256,7 +256,7 @@
 
       <div class="history-controls-bar">
         <div class="history-buttons-left">
-          <button id="btnFetchHistory" class="btn btn-primary" disabled title="Зчитати повний 90-денний журнал вимірювань з флеш-пам'яті приладу">
+          <button id="btnFetchHistory" class="btn btn-primary" title="Зчитати повний 90-денний журнал вимірювань з флеш-пам'яті приладу">
             <span>📥 Зчитати історію з приладу</span>
           </button>
           <button id="btnAbortHistory" class="btn btn-outline btn-danger" style="display: none;" title="Зупинити зчитування архіву">
@@ -422,6 +422,6 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <!-- Application Logic -->
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=1.1.1"></script>
 </body>
 </html>

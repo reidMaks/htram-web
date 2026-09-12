@@ -50,16 +50,26 @@ const batterySegments = document.getElementById('batterySegments').children;
 const chargingBadge = document.getElementById('chargingBadge');
 const batteryStatusText = document.getElementById('batteryStatusText');
 
-// DOM Elements: Telemetry History & Export
+// DOM Elements: On-Device History & Chart Export
+const historySourceBadge = document.getElementById('historySourceBadge');
+const btnFetchHistory = document.getElementById('btnFetchHistory');
+const btnAbortHistory = document.getElementById('btnAbortHistory');
+const chkSyncTimeFirst = document.getElementById('chkSyncTimeFirst');
+const historyProgressWrap = document.getElementById('historyProgressWrap');
+const historyProgressStatus = document.getElementById('historyProgressStatus');
+const historyProgressCount = document.getElementById('historyProgressCount');
+const historyProgressBar = document.getElementById('historyProgressBar');
+
 const btnExportCsv = document.getElementById('btnExportCsv');
 const btnClearHistory = document.getElementById('btnClearHistory');
 const historyChart = document.getElementById('historyChart');
 const chartPlaceholder = document.getElementById('chartPlaceholder');
+const statDateStart = document.getElementById('statDateStart');
+const statDateEnd = document.getElementById('statDateEnd');
+const statCount = document.getElementById('statCount');
 const statMinCo2 = document.getElementById('statMinCo2');
 const statAvgCo2 = document.getElementById('statAvgCo2');
 const statMaxCo2 = document.getElementById('statMaxCo2');
-const statCount = document.getElementById('statCount');
-const statDuration = document.getElementById('statDuration');
 
 // DOM Elements: Settings
 const inputAlarmLow = document.getElementById('inputAlarmLow');
@@ -85,9 +95,9 @@ let lastRawTemperature = null;
 let hasShownMuteDonatePrompt = false;
 
 // History state
-const telemetryHistory = [];
-let sessionStartTime = null;
-let sessionDurationInterval = null;
+let deviceHistoryRecords = []; // Historical records retrieved from on-device Flash memory
+const telemetryHistory = [];   // Live session telemetry points
+let historyAbortController = null;
 
 // ------------------------------------------------------------- Initialization
 
@@ -260,11 +270,22 @@ function setupEventListeners() {
     }
   });
 
-  // History Actions
-  btnExportCsv.addEventListener('click', () => exportTelemetryCsv());
+  // On-Device Flash History Actions
+  btnFetchHistory.addEventListener('click', async () => {
+    await fetchDeviceHistoryHandler();
+  });
+
+  btnAbortHistory.addEventListener('click', () => {
+    if (historyAbortController) {
+      historyAbortController.abort();
+      showToast('Зупинка зчитування історії...', 2000);
+    }
+  });
+
+  btnExportCsv.addEventListener('click', () => exportHistoryCsv());
   btnClearHistory.addEventListener('click', () => {
-    if (confirm('Очистити накопичені точки історії вимірювань поточної сесії?')) {
-      clearTelemetryHistory();
+    if (confirm('Очистити відображення графіка та завантажену історію?')) {
+      clearAllHistory();
     }
   });
 
@@ -303,12 +324,6 @@ function updateConnectionState(state) {
       btnDisconnect.style.display = 'inline-flex';
       deviceMetaArea.style.display = 'flex';
       setControlsEnabled(true);
-
-      // Start session duration timer
-      if (!sessionStartTime) {
-        sessionStartTime = new Date();
-        startDurationTimer();
-      }
       break;
 
     case BLE_STATES.CONNECTING:
@@ -328,7 +343,6 @@ function updateConnectionState(state) {
       deviceMetaArea.style.display = 'none';
       setControlsEnabled(false);
       resetTelemetryUI();
-      stopDurationTimer();
       break;
   }
 }
@@ -341,6 +355,7 @@ function setControlsEnabled(enabled) {
   inputAlarmHigh.disabled = !enabled;
   selectScreenOff.disabled = !enabled;
   selectDeviceTempUnit.disabled = !enabled;
+  btnFetchHistory.disabled = !enabled || ble.isFetchingHistory;
 }
 
 function updateBuzzerUI(enabled) {
@@ -464,9 +479,11 @@ function updateTelemetryUI(data) {
       telemetryHistory.shift();
     }
 
-    updateHistoryStats();
-    renderHistoryChart();
-    btnExportCsv.disabled = false;
+    if (deviceHistoryRecords.length === 0) {
+      updateHistoryStats();
+      renderHistoryChart();
+      btnExportCsv.disabled = false;
+    }
   }
 }
 
@@ -544,26 +561,68 @@ function updateDeviceInfoUI(info) {
 
 // ------------------------------------------------------------- History, Chart & CSV
 
-function startDurationTimer() {
-  stopDurationTimer();
-  sessionDurationInterval = setInterval(() => {
-    if (!sessionStartTime) return;
-    const diffSec = Math.floor((new Date() - sessionStartTime) / 1000);
-    const m = Math.floor(diffSec / 60);
-    const s = diffSec % 60;
-    statDuration.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  }, 1000);
-}
+async function fetchDeviceHistoryHandler() {
+  if (ble.state !== BLE_STATES.CONNECTED) {
+    showToast('⚠️ Прилад не підключено');
+    return;
+  }
 
-function stopDurationTimer() {
-  if (sessionDurationInterval) {
-    clearInterval(sessionDurationInterval);
-    sessionDurationInterval = null;
+  btnFetchHistory.disabled = true;
+  btnAbortHistory.style.display = 'inline-flex';
+  historyProgressWrap.style.display = 'block';
+  historyProgressStatus.textContent = '⚡ Ініціалізація зв\'язку з приладом...';
+  historyProgressCount.textContent = '0 записів';
+
+  historyAbortController = new AbortController();
+
+  try {
+    const records = await ble.fetchDeviceHistory({
+      syncTimeFirst: chkSyncTimeFirst.checked,
+      signal: historyAbortController.signal,
+      onProgress: ({ count, blockCount, blockAddress, isComplete }) => {
+        historyProgressStatus.textContent = `Зчитування блоку 0x${blockAddress} (#${blockCount})...`;
+        historyProgressCount.textContent = `${count.toLocaleString('uk-UA')} записів`;
+      },
+    });
+
+    if (records && records.length > 0) {
+      records.sort((a, b) => a.time - b.time);
+      deviceHistoryRecords = records;
+
+      historySourceBadge.style.display = 'inline-block';
+      historySourceBadge.textContent = `Flash-пам'ять (${records.length.toLocaleString('uk-UA')} точок)`;
+
+      updateHistoryStats();
+      renderHistoryChart();
+      btnExportCsv.disabled = false;
+
+      showToast(`📥 Успішно завантажено ${records.length.toLocaleString('uk-UA')} вимірювань з пам'яті приладу!`, 5000);
+    } else {
+      showToast('Вбудована пам\'ять приладу порожня або не містить записів.');
+    }
+  } catch (err) {
+    if (historyAbortController && historyAbortController.signal.aborted) {
+      showToast('Зчитування історії скасовано користувачем.');
+      if (deviceHistoryRecords.length === 0 && telemetryHistory.length > 0) {
+        renderHistoryChart();
+      }
+    } else {
+      showToast(`Помилка зчитування пам'яті: ${err.message}`, 6000);
+    }
+  } finally {
+    btnFetchHistory.disabled = (ble.state !== BLE_STATES.CONNECTED);
+    btnAbortHistory.style.display = 'none';
+    historyProgressWrap.style.display = 'none';
+    historyAbortController = null;
   }
 }
 
 function updateHistoryStats() {
-  if (!telemetryHistory.length) {
+  const activeDataset = (deviceHistoryRecords.length > 0) ? deviceHistoryRecords : telemetryHistory;
+
+  if (!activeDataset.length) {
+    statDateStart.textContent = '---';
+    statDateEnd.textContent = '---';
     statMinCo2.textContent = '---';
     statAvgCo2.textContent = '---';
     statMaxCo2.textContent = '---';
@@ -571,8 +630,31 @@ function updateHistoryStats() {
     return;
   }
 
-  const vals = telemetryHistory.map((d) => d.co2).filter((v) => typeof v === 'number');
-  if (!vals.length) return;
+  const firstDate = activeDataset[0].time;
+  const lastDate = activeDataset[activeDataset.length - 1].time;
+
+  const formatDate = (d) => {
+    if (!d || !(d instanceof Date) || isNaN(d.getTime())) return '---';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = String(d.getFullYear()).slice(-2);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}.${month}.${year} ${hours}:${minutes}`;
+  };
+
+  statDateStart.textContent = formatDate(firstDate);
+  statDateEnd.textContent = formatDate(lastDate);
+
+  const vals = activeDataset.map((d) => d.co2).filter((v) => typeof v === 'number');
+  statCount.textContent = activeDataset.length.toLocaleString('uk-UA');
+
+  if (!vals.length) {
+    statMinCo2.textContent = '---';
+    statAvgCo2.textContent = '---';
+    statMaxCo2.textContent = '---';
+    return;
+  }
 
   const min = Math.min(...vals);
   const max = Math.max(...vals);
@@ -581,16 +663,16 @@ function updateHistoryStats() {
   statMinCo2.textContent = `${min} ppm`;
   statAvgCo2.textContent = `${avg} ppm`;
   statMaxCo2.textContent = `${max} ppm`;
-  statCount.textContent = vals.length.toString();
 }
 
-function clearTelemetryHistory() {
+function clearAllHistory() {
+  deviceHistoryRecords = [];
   telemetryHistory.length = 0;
-  sessionStartTime = new Date();
+  historySourceBadge.style.display = 'none';
   btnExportCsv.disabled = true;
   updateHistoryStats();
   renderHistoryChart();
-  showToast('Історію вимірювань сесії очищено.');
+  showToast('Графік та історію вимірювань очищено.');
 }
 
 function renderHistoryChart() {
@@ -599,30 +681,50 @@ function renderHistoryChart() {
   const dpr = window.devicePixelRatio || 1;
   const rect = historyChart.getBoundingClientRect();
   const width = rect.width || 800;
-  const height = rect.height || 180;
+  const height = rect.height || 200;
 
   historyChart.width = width * dpr;
   historyChart.height = height * dpr;
   ctx.scale(dpr, dpr);
-
   ctx.clearRect(0, 0, width, height);
 
-  if (telemetryHistory.length < 2) {
+  const activeDataset = (deviceHistoryRecords.length > 0) ? deviceHistoryRecords : telemetryHistory;
+
+  if (activeDataset.length < 2) {
     chartPlaceholder.style.display = 'flex';
+    chartPlaceholder.querySelector('span').textContent = (deviceHistoryRecords.length === 0)
+      ? 'Підключіть прилад та натисніть «Зчитати історію з приладу» для побудови графіка...'
+      : 'Недостатньо точок для побудови графіка...';
     return;
   }
   chartPlaceholder.style.display = 'none';
+
+  // Decimate points if dataset is huge for butter-smooth Canvas performance
+  let pointsToRender = activeDataset;
+  if (activeDataset.length > 2500) {
+    const step = Math.ceil(activeDataset.length / 2000);
+    pointsToRender = [];
+    for (let i = 0; i < activeDataset.length; i += step) {
+      pointsToRender.push(activeDataset[i]);
+    }
+    const lastPt = activeDataset[activeDataset.length - 1];
+    if (pointsToRender[pointsToRender.length - 1] !== lastPt) {
+      pointsToRender.push(lastPt);
+    }
+  }
 
   const padding = { top: 22, right: 24, bottom: 26, left: 45 };
   const chartW = width - padding.left - padding.right;
   const chartH = height - padding.top - padding.bottom;
 
   const { low, high } = getActiveThresholds();
-  const co2Values = telemetryHistory.map((d) => d.co2);
+  const co2Values = pointsToRender.map((d) => d.co2).filter((v) => v !== null);
+  if (co2Values.length < 2) return;
+
   const minVal = Math.min(400, ...co2Values);
   const maxVal = Math.max(1200, high + 200, ...co2Values);
 
-  const getX = (i) => padding.left + (i / (telemetryHistory.length - 1)) * chartW;
+  const getX = (i) => padding.left + (i / (pointsToRender.length - 1)) * chartW;
   const getY = (val) => padding.top + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
 
   // 1. Threshold background guide lines
@@ -666,11 +768,12 @@ function renderHistoryChart() {
   }
 
   ctx.beginPath();
-  ctx.moveTo(getX(0), getY(co2Values[0]));
-  for (let i = 1; i < telemetryHistory.length; i++) {
-    ctx.lineTo(getX(i), getY(co2Values[i]));
+  ctx.moveTo(getX(0), getY(pointsToRender[0].co2 || minVal));
+  for (let i = 1; i < pointsToRender.length; i++) {
+    const val = pointsToRender[i].co2 !== null ? pointsToRender[i].co2 : minVal;
+    ctx.lineTo(getX(i), getY(val));
   }
-  ctx.lineTo(getX(telemetryHistory.length - 1), padding.top + chartH);
+  ctx.lineTo(getX(pointsToRender.length - 1), padding.top + chartH);
   ctx.lineTo(getX(0), padding.top + chartH);
   ctx.closePath();
 
@@ -682,59 +785,84 @@ function renderHistoryChart() {
 
   // 3. Line stroke
   ctx.beginPath();
-  ctx.moveTo(getX(0), getY(co2Values[0]));
-  for (let i = 1; i < telemetryHistory.length; i++) {
-    ctx.lineTo(getX(i), getY(co2Values[i]));
+  ctx.moveTo(getX(0), getY(pointsToRender[0].co2 || minVal));
+  for (let i = 1; i < pointsToRender.length; i++) {
+    const val = pointsToRender[i].co2 !== null ? pointsToRender[i].co2 : minVal;
+    ctx.lineTo(getX(i), getY(val));
   }
   ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 2.0;
   ctx.stroke();
 
-  // 4. Latest point dot
-  const lastIdx = telemetryHistory.length - 1;
-  const curX = getX(lastIdx);
-  const curY = getY(co2Values[lastIdx]);
-  ctx.fillStyle = strokeColor;
-  ctx.beginPath();
-  ctx.arc(curX, curY, 4, 0, Math.PI * 2);
-  ctx.fill();
+  // 4. Dot at the latest point if small dataset
+  if (pointsToRender.length < 500) {
+    const lastIdx = pointsToRender.length - 1;
+    const curX = getX(lastIdx);
+    const curY = getY(pointsToRender[lastIdx].co2 || minVal);
+    ctx.fillStyle = strokeColor;
+    ctx.beginPath();
+    ctx.arc(curX, curY, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  // Time labels on horizontal axis
+  // 5. Time labels on horizontal axis
   ctx.fillStyle = '#64748b';
   ctx.font = '10px Inter, sans-serif';
-  const startTimeStr = telemetryHistory[0].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const endTimeStr = telemetryHistory[lastIdx].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  ctx.fillText(startTimeStr, padding.left, height - 8);
+
+  const startTime = pointsToRender[0].time;
+  const endTime = pointsToRender[pointsToRender.length - 1].time;
+  const isMultiDay = (endTime - startTime) > 24 * 3600 * 1000;
+
+  const formatXLabel = (d) => {
+    if (!d || !(d instanceof Date) || isNaN(d.getTime())) return '';
+    if (isMultiDay) {
+      return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  ctx.fillText(formatXLabel(startTime), padding.left, height - 8);
   ctx.textAlign = 'right';
-  ctx.fillText(endTimeStr, padding.left + chartW, height - 8);
+  ctx.fillText(formatXLabel(endTime), padding.left + chartW, height - 8);
   ctx.textAlign = 'left';
 }
 
-function exportTelemetryCsv() {
-  if (!telemetryHistory.length) {
-    showToast('⚠️ Немає накопичених даних для експорту.');
+function exportHistoryCsv() {
+  const isDeviceData = deviceHistoryRecords.length > 0;
+  const dataToExport = isDeviceData ? deviceHistoryRecords : telemetryHistory;
+
+  if (!dataToExport.length) {
+    showToast('⚠️ Немає даних для експорту.');
     return;
   }
 
   const isCelsius = ble.info.tempUnitCelsius !== false;
   const tempHeader = isCelsius ? 'Температура (°C)' : 'Температура (°F)';
 
-  const headers = ['Дата', 'Час', 'CO2 (ppm)', tempHeader, 'Вологість (%)', 'Батарея (%)', 'Живлення'];
+  const headers = [
+    'Дата та час (локальний)',
+    'Дата та час (UTC)',
+    'UNIX Timestamp',
+    'CO2 (ppm)',
+    tempHeader,
+    'Вологість (%)',
+    'Джерело',
+  ];
   const rows = [headers.join(',')];
 
-  for (const d of telemetryHistory) {
-    const dateStr = d.time.toLocaleDateString('uk-UA');
-    const timeStr = d.time.toLocaleTimeString('uk-UA');
-    const co2 = d.co2 !== null ? d.co2 : '';
+  for (const d of dataToExport) {
+    const locStr = d.time instanceof Date ? d.time.toLocaleString('uk-UA') : '';
+    const utcStr = d.time instanceof Date ? d.time.toISOString() : '';
+    const ts = d.timestamp || (d.time instanceof Date ? Math.floor(d.time.getTime() / 1000) : '');
+    const co2 = d.co2 !== null && d.co2 !== undefined ? d.co2 : '';
     let temp = '';
-    if (d.temperature !== null) {
+    if (d.temperature !== null && d.temperature !== undefined) {
       temp = isCelsius ? d.temperature : ((d.temperature * 9) / 5 + 32).toFixed(1);
     }
-    const hum = d.humidity !== null ? d.humidity : '';
-    const bat = d.battery !== null ? d.battery : '';
-    const charge = d.charging ? 'Заряджання' : 'Автономно';
+    const hum = d.humidity !== null && d.humidity !== undefined ? d.humidity : '';
+    const source = isDeviceData ? 'Flash пам\'ять приладу' : 'Сесія моніторингу';
 
-    rows.push(`"${dateStr}","${timeStr}",${co2},${temp},${hum},${bat},"${charge}"`);
+    rows.push(`"${locStr}","${utcStr}",${ts},${co2},${temp},${hum},"${source}"`);
   }
 
   // UTF-8 BOM (\uFEFF) ensures Excel opens Ukrainian headers correctly
@@ -743,7 +871,9 @@ function exportTelemetryCsv() {
   const url = URL.createObjectURL(blob);
 
   const now = new Date();
-  const filename = `htram_telemetry_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}.csv`;
+  const dateTag = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const prefix = isDeviceData ? 'htram_flash_log' : 'htram_session';
+  const filename = `${prefix}_${dateTag}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}.csv`;
 
   const link = document.createElement('a');
   link.setAttribute('href', url);
@@ -753,7 +883,7 @@ function exportTelemetryCsv() {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 
-  showToast(`📥 Успішно експортовано ${telemetryHistory.length} зрізів у ${filename}`);
+  showToast(`📥 Успішно експортовано ${dataToExport.length.toLocaleString('uk-UA')} записів у ${filename}`);
 }
 
 // ------------------------------------------------------------- Console & Toast

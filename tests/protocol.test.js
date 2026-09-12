@@ -28,6 +28,9 @@ import {
   parseSound,
   parseTempUnit,
   parseSku,
+  CMD_FETCH_DATALOG,
+  buildDataLogRequest,
+  parseDataLogResponse,
   parseFirmware,
   parseLinkStatus,
   FrameAccumulator,
@@ -160,6 +163,63 @@ describe('HTRAM Response Parsers', () => {
   test('parseFirmware decodes ASCII string', () => {
     const frame = buildFrame([0x21, 0x23], [0x01, ...new TextEncoder().encode('V1.00 ')]);
     expect(parseFirmware(frame)).toBe('V1.00');
+  });
+
+  test('buildDataLogRequest builds valid frames', () => {
+    const defaultFrame = buildDataLogRequest();
+    expect(frameIsValid(defaultFrame)).toBe(true);
+    expect(frameOpcode(defaultFrame)).toBe(0x2093);
+    // Body: 01 FF FF FF FF
+    expect(Array.from(defaultFrame.subarray(6, 11))).toEqual([0x01, 0xFF, 0xFF, 0xFF, 0xFF]);
+
+    const customFrame = buildDataLogRequest([0x00, 0x12, 0x34, 0x56]);
+    expect(frameIsValid(customFrame)).toBe(true);
+    expect(Array.from(customFrame.subarray(6, 11))).toEqual([0x01, 0x00, 0x12, 0x34, 0x56]);
+  });
+
+  test('parseDataLogResponse parses records and nextAddress', () => {
+    // 0x2193 frame with nextAddress: 00 00 10 00
+    // Record 1: ts = 1726000000 (0x66E0A580), co2 = 650 (0x028A), temp = 23, hum = 50
+    // Record 2: ts = 1726000300 (0x66E0A6AC), co2 = 1200 (0x04B0), temp = 251 (-5 signed), hum = 40
+    const body = [
+      0x01, // status / header
+      0x00, 0x00, 0x10, 0x00, // next address
+      // Record 1: 1726000000 = 0x66E0AB80
+      0x66, 0xE0, 0xAB, 0x80, 0x02, 0x8A, 23, 50,
+      // Record 2: 1726000300 = 0x66E0ACAC
+      0x66, 0xE0, 0xAC, 0xAC, 0x04, 0xB0, 251, 40,
+    ];
+    const frame = buildFrame([0x21, 0x93], body);
+    const result = parseDataLogResponse(frame);
+
+    expect(result).not.toBeNull();
+    expect(result?.isComplete).toBe(false);
+    expect(result?.nextAddress).toEqual([0x00, 0x00, 0x10, 0x00]);
+    expect(result?.records.length).toBe(2);
+
+    expect(result?.records[0].timestamp).toBe(1726000000);
+    expect(result?.records[0].co2).toBe(650);
+    expect(result?.records[0].temperature).toBe(23);
+    expect(result?.records[0].humidity).toBe(50);
+    expect(result?.records[0].time.getTime()).toBe(1726000000 * 1000);
+
+    expect(result?.records[1].timestamp).toBe(1726000300);
+    expect(result?.records[1].co2).toBe(1200);
+    expect(result?.records[1].temperature).toBe(-5);
+    expect(result?.records[1].humidity).toBe(40);
+  });
+
+  test('parseDataLogResponse detects completion when nextAddress is all 0xFF', () => {
+    const body = [
+      0x01,
+      0xFF, 0xFF, 0xFF, 0xFF, // next address = complete!
+    ];
+    const frame = buildFrame([0x21, 0x93], body);
+    const result = parseDataLogResponse(frame);
+
+    expect(result).not.toBeNull();
+    expect(result?.isComplete).toBe(true);
+    expect(result?.records.length).toBe(0);
   });
 });
 

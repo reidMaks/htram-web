@@ -39,6 +39,8 @@ export const CMD_FIRMWARE = [0x20, 0x23];
 export const CMD_LINK_STATUS = [0x74, 0x00];
 export const CMD_RADIO_MODE = [0x74, 0x58];
 export const CMD_TIME_SYNC = [0x22, 0x42];
+export const CMD_FETCH_DATALOG = [0x20, 0x93];
+
 
 // Precompute CRC-16 table (0x8005, MSB-first)
 function buildCrc16Table(poly = CRC_POLY) {
@@ -244,6 +246,21 @@ export function buildTimeSyncRequest(date = new Date(), useUtc = false) {
   return buildFrame(CMD_TIME_SYNC, [0x01, year, month, day, hour, minute, second]);
 }
 
+/**
+ * Request a block of historical sensor records from SPI Flash memory.
+ * Initial address starts at [0xFF, 0xFF, 0xFF, 0xFF].
+ * Subsequent requests pass the 4-byte nextAddress returned by the device.
+ * @param {Array<number>|Uint8Array} [address=[0xFF, 0xFF, 0xFF, 0xFF]] 4-byte flash address
+ * @returns {Uint8Array}
+ */
+export function buildDataLogRequest(address = [0xFF, 0xFF, 0xFF, 0xFF]) {
+  const addrBytes = Array.from(address);
+  if (addrBytes.length !== 4) {
+    throw new Error(`Invalid flash address length: ${addrBytes.length}, expected 4 bytes`);
+  }
+  return buildFrame(CMD_FETCH_DATALOG, [0x01, ...addrBytes]);
+}
+
 // ------------------------------------------------------------- Response Parsers
 
 /**
@@ -340,6 +357,53 @@ export function parseFirmware(frame) {
 export function parseLinkStatus(frame) {
   if (!frame || frame.length < 8) return null;
   return frame[7];
+}
+
+/**
+ * Parse 0x2193 historical datalog response frame
+ * @param {Uint8Array} frame
+ * @returns {{nextAddress: number[], isComplete: boolean, records: Array<{timestamp: number, time: Date, co2: number|null, temperature: number|null, humidity: number|null}>}|null}
+ */
+export function parseDataLogResponse(frame) {
+  if (!frame || frame.length < 14) return null;
+  const nextAddress = Array.from(frame.subarray(7, 11));
+  const isComplete = nextAddress.every((b) => b === 0xFF);
+  const records = [];
+
+  const payload = frame.subarray(11, frame.length - 3);
+  for (let i = 0; i + 8 <= payload.length; i += 8) {
+    const tsSec = (
+      ((payload[i] * 16777216) >>> 0) +
+      ((payload[i + 1] << 16) >>> 0) +
+      ((payload[i + 2] << 8) >>> 0) +
+      payload[i + 3]
+    ) >>> 0;
+
+    const co2Raw = (payload[i + 4] << 8) | payload[i + 5];
+    const tempRaw = payload[i + 6];
+    const humRaw = payload[i + 7];
+
+    // Skip uninitialized/erased flash entries
+    if (tsSec === 0xFFFFFFFF && co2Raw === 0xFFFF) {
+      continue;
+    }
+
+    const temp = tempRaw > 128 ? tempRaw - 256 : tempRaw;
+
+    records.push({
+      timestamp: tsSec,
+      time: new Date(tsSec * 1000),
+      co2: (co2Raw === CO2_INVALID || co2Raw === 0xFFFF) ? null : co2Raw,
+      temperature: (tempRaw === TEMP_INVALID || tempRaw === 0xFF) ? null : temp,
+      humidity: (humRaw === HUM_INVALID || humRaw === 0xFF) ? null : humRaw,
+    });
+  }
+
+  return {
+    nextAddress,
+    isComplete,
+    records,
+  };
 }
 
 // ------------------------------------------------------------- Frame Reassembly

@@ -244,22 +244,65 @@
       </div>
     </section>
 
-    <!-- Telemetry History, Realtime Chart & CSV Export -->
+    <!-- Telemetry History, On-Device Flash Log & CSV Export -->
     <section class="card" id="sectionHistory">
       <div class="section-title">
-        <span>📈 Історія вимірювань сесії</span>
-        <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
-          <button id="btnExportCsv" class="btn btn-outline" style="padding: 6px 14px; font-size: 0.825rem;" disabled title="Вивантажити історію поточної сесії у файл CSV для Excel">
+        <span>📥 Архів вимірювань з пам'яті приладу (Flash Log ~90 днів)</span>
+        <span id="historySourceBadge" class="device-meta-badge" style="margin-left: auto; display: none;">Пам'ять приладу</span>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: -8px; margin-bottom: 14px;">
+        Датчик автоматично фіксує концентрацію CO₂, температуру та вологість у вбудовану SPI Flash-пам'ять. Натисніть кнопку, щоб вивантажити повний автономний архів за період до 90 днів.
+      </p>
+
+      <div class="history-controls-bar">
+        <div class="history-buttons-left">
+          <button id="btnFetchHistory" class="btn btn-primary" disabled title="Зчитати повний 90-денний журнал вимірювань з флеш-пам'яті приладу">
+            <span>📥 Зчитати історію з приладу</span>
+          </button>
+          <button id="btnAbortHistory" class="btn btn-outline btn-danger" style="display: none;" title="Зупинити зчитування архіву">
+            <span>⏹ Зупинити</span>
+          </button>
+          <label class="checkbox-label" title="Синхронізує внутрішній годинник датчика перед початком завантаження архіву">
+            <input type="checkbox" id="chkSyncTimeFirst" checked>
+            <span>Синхронізувати час перед зчитуванням</span>
+          </label>
+        </div>
+
+        <div class="history-buttons-right">
+          <button id="btnExportCsv" class="btn btn-outline" style="padding: 6px 14px; font-size: 0.825rem;" disabled title="Вивантажити вимірювання у файл CSV для Excel">
             <span>📥 Експорт у CSV</span>
           </button>
-          <button id="btnClearHistory" class="btn btn-outline" style="padding: 6px 10px; font-size: 0.825rem; color: var(--text-dim);" title="Очистити історію сесії">
+          <button id="btnClearHistory" class="btn btn-outline" style="padding: 6px 10px; font-size: 0.825rem; color: var(--text-dim);" title="Очистити графік">
             <span>🗑</span>
           </button>
         </div>
       </div>
 
-      <!-- Quick Session Stats -->
+      <!-- Reading Progress Box -->
+      <div id="historyProgressWrap" class="history-progress-box" style="display: none;">
+        <div class="history-progress-text">
+          <span id="historyProgressStatus">⚡ Підготовка до зчитування флеш-пам'яті...</span>
+          <span id="historyProgressCount">0 записів</span>
+        </div>
+        <div class="progress-track">
+          <div id="historyProgressBar" class="progress-bar-indeterminate"></div>
+        </div>
+      </div>
+
+      <!-- Quick History Stats -->
       <div class="history-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">Перший запис</span>
+          <span id="statDateStart" class="stat-val">---</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Останній запис</span>
+          <span id="statDateEnd" class="stat-val">---</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Записів усього</span>
+          <span id="statCount" class="stat-val">0</span>
+        </div>
         <div class="stat-item">
           <span class="stat-label">Мінімум CO₂</span>
           <span id="statMinCo2" class="stat-val">---</span>
@@ -272,21 +315,13 @@
           <span class="stat-label">Максимум CO₂</span>
           <span id="statMaxCo2" class="stat-val">---</span>
         </div>
-        <div class="stat-item">
-          <span class="stat-label">Зрізів даних</span>
-          <span id="statCount" class="stat-val">0</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Тривалість</span>
-          <span id="statDuration" class="stat-val">00:00</span>
-        </div>
       </div>
 
       <!-- Canvas Chart Container -->
       <div class="chart-container">
-        <canvas id="historyChart" width="800" height="180"></canvas>
+        <canvas id="historyChart" width="800" height="200"></canvas>
         <div id="chartPlaceholder" class="chart-placeholder">
-          <span>Очікування перших показників від приладу для побудови графіка...</span>
+          <span>Підключіть прилад та натисніть «Зчитати історію з приладу» для побудови графіка...</span>
         </div>
       </div>
     </section>

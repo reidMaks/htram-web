@@ -23,6 +23,8 @@ import {
   buildFirmwareRequest,
   buildRadioModeRequest,
   buildTimeSyncRequest,
+  buildDataLogRequest,
+  parseDataLogResponse,
   parseRealtime,
   parseSettings,
   parseSound,
@@ -54,6 +56,7 @@ export class BleClient extends EventTarget {
 
     this._heartbeatInterval = null;
     this._pollingInterval = null;
+    this.isFetchingHistory = false;
 
     // Cached device properties
     this.info = {
@@ -434,6 +437,103 @@ export class BleClient extends EventTarget {
   }
 
   /**
+   * Fetch complete historical datalog (~90 days) from device SPI flash memory.
+   * Pauses background telemetry polling during fetch to prevent GATT collision.
+   * 
+   * @param {Object} [options={}]
+   * @param {boolean} [options.syncTimeFirst=true] Synchronize time before downloading
+   * @param {Function} [options.onProgress] Callback ({ count, blockCount, blockAddress, isComplete, records })
+   * @param {AbortSignal} [options.signal] AbortSignal for user cancellation
+   * @returns {Promise<Array<{timestamp: number, time: Date, co2: number|null, temperature: number|null, humidity: number|null}>>}
+   */
+  async fetchDeviceHistory(options = {}) {
+    const { syncTimeFirst = true, onProgress = null, signal = null } = options;
+
+    if (this.state !== BLE_STATES.CONNECTED) {
+      throw new Error('Пристрій не підключено');
+    }
+
+    if (this.isFetchingHistory) {
+      throw new Error('Зчитування історії вже виконується');
+    }
+
+    this.isFetchingHistory = true;
+    this._stopTimers();
+    this._log('info', 'Початок зчитування архіву вимірювань з флеш-пам\'яті приладу...');
+
+    try {
+      if (syncTimeFirst) {
+        try {
+          this._log('info', 'Попередня синхронізація часу приладу...');
+          await this.syncTime(new Date(), false);
+          await new Promise((r) => setTimeout(r, 400));
+        } catch (syncErr) {
+          this._log('error', `Попередню синхронізацію часу пропущено: ${syncErr.message}`);
+        }
+      }
+
+      let currentAddress = [0xFF, 0xFF, 0xFF, 0xFF];
+      const allRecords = [];
+      let blockCount = 0;
+
+      while (true) {
+        if (signal && signal.aborted) {
+          this._log('info', 'Зчитування історії перервано користувачем');
+          break;
+        }
+
+        const addrHex = bytesToHex(currentAddress);
+        this._log('out', `Запит блоку історії: 0x${addrHex}`);
+
+        const requestPacket = buildDataLogRequest(currentAddress);
+        // Expect response opcode 0x2193 with 6-second timeout per block
+        const responseFrame = await this.sendCommand(requestPacket, 0x2193, 6000);
+
+        if (!responseFrame) {
+          throw new Error(`Не вдалося отримати блок історії 0x${addrHex}`);
+        }
+
+        const parsed = parseDataLogResponse(responseFrame);
+        if (!parsed) {
+          throw new Error(`Помилка розбору блоку історії 0x${addrHex}`);
+        }
+
+        blockCount++;
+        for (const rec of parsed.records) {
+          allRecords.push(rec);
+        }
+
+        if (onProgress) {
+          onProgress({
+            count: allRecords.length,
+            blockCount,
+            blockAddress: addrHex,
+            isComplete: parsed.isComplete,
+            records: parsed.records,
+          });
+        }
+
+        if (parsed.isComplete) {
+          this._log('info', `Зчитування історії завершено! Всього блоків: ${blockCount}, записів: ${allRecords.length}`);
+          break;
+        }
+
+        currentAddress = parsed.nextAddress;
+
+        // Brief delay between blocks (200ms) to ensure GD32 MCU flash read & BLE stability
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      return allRecords;
+    } finally {
+      this.isFetchingHistory = false;
+      if (this.state === BLE_STATES.CONNECTED) {
+        this._startTimers();
+      }
+    }
+  }
+
+  /**
    * Disconnect from device
    */
   async disconnect() {
@@ -447,6 +547,7 @@ export class BleClient extends EventTarget {
   }
 
   _cleanup() {
+    this.isFetchingHistory = false;
     this._stopTimers();
     this.accumulator.reset();
     for (const [, queue] of this._pendingResolvers) {

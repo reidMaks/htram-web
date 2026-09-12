@@ -1,0 +1,7 @@
+services:
+  htram-web:
+    build: .
+    container_name: htram-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"

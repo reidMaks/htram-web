@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>HTRAM Web Configurator & Monitor 🇺🇦</title>
+  <meta name="description" content="Автономний веб-конфігуратор датчика Honeywell HTRAM через Web Bluetooth API. Вимкнення зумера, синхронізація часу та моніторинг CO2.">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%20%22100%22%20%22100%22><text y=%22.9em%22 font-size=%2290%22>🍃</text></svg>">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">🍃</div>
+        <div class="brand-titles">
+          <h1>HTRAM Monitor 🇺🇦</h1>
+          <p>Honeywell Transmission Risk Air Monitor (HTRAM-V1-W)</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btnOpenDonate" class="btn btn-mono" title="Підтримати розробника">
+          <span>🐱 На каву в Monobank</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Browser compatibility warning & Troubleshooting -->
+    <div id="unsupportedAlert" class="alert alert-warning" style="display: none;">
+      <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 1.6rem; line-height: 1;">⚠️</span>
+          <div>
+            <strong style="font-size: 1.05rem; color: #fbbf24;">Web Bluetooth API не виявлено або заблоковано браузером.</strong>
+            <p style="font-size: 0.85rem; color: #e2e8f0; margin-top: 2px;">
+              Ось як увімкнути Bluetooth залежно від вашої системи та браузера:
+            </p>
+          </div>
+        </div>
+        <button id="btnCloseHelpAlert" class="modal-close" style="color: #cbd5e1; font-size: 1.5rem; background: none; border: none; cursor: pointer; padding: 4px 8px;" title="Приховати інструкцію">&times;</button>
+      </div>
+
+      <div class="troubleshoot-list">
+        <!-- 1. Brave Browser Guide -->
+        <div class="troubleshoot-item" id="guideBrave">
+          <h4>🦁 1. Якщо ви використовуєте Brave (Linux / Windows / macOS)</h4>
+          <p>У Brave Web Bluetooth <strong>вимкнено за замовчуванням</strong> з міркувань приватності. Щоб увімкнути:</p>
+          <ol>
+            <li>Введіть в адресному рядку Brave: <span class="code-snippet">brave://flags/#enable-web-bluetooth</span></li>
+            <li>Знайдіть прапорець <strong>Web Bluetooth</strong> (та за потреби <em>Web Bluetooth new permissions backend</em>).</li>
+            <li>Переведіть його у стан <strong>Enabled</strong>.</li>
+            <li>Натисніть кнопку <strong>Relaunch</strong> у правому нижньому кутку для перезапуску браузера.</li>
+          </ol>
+        </div>
+
+        <!-- 2. Secure Context & Local Network IP -->
+        <div class="troubleshoot-item" id="guideSecureContext">
+          <h4>🔒 2. Вимога безпечного середовища (HTTPS або localhost)</h4>
+          <p>Специфікація Web Bluetooth працює <strong>виключно в захищеному контексті</strong>:</p>
+          <ul>
+            <li><span class="highlight-success">✅ Працює з коробки:</span> <span class="code-snippet">http://localhost:8080</span> або <span class="code-snippet">http://127.0.0.1:8080</span></li>
+            <li><span class="highlight-success">✅ Працює:</span> будь-яке з'єднання через <span class="code-snippet">https://...</span></li>
+            <li>
+              <span class="highlight-danger">❌ Блокується за замовчуванням:</span> відкриття за локальною IP (наприклад, <span class="code-snippet">http://192.168.X.X:8080</span>).<br>
+              <em>Рішення для локальної мережі:</em> введіть у браузері <span class="code-snippet">chrome://flags/#unsafely-treat-insecure-origin-as-secure</span> (або <span class="code-snippet">brave://flags/...</span>), додайте у поле повну адресу (наприклад, <span class="code-snippet" id="currentOriginSnippet">http://192.168.1.100:8080</span>), перемкніть у <strong>Enabled</strong> та перезапустіть браузер.
+            </li>
+          </ul>
+        </div>
+
+        <!-- 3. Linux BlueZ Guide -->
+        <div class="troubleshoot-item" id="guideLinux">
+          <h4>🐧 3. Для користувачів Linux (BlueZ)</h4>
+          <p>У системі Linux браузери Chromium звертаються до системної служби Bluetooth:</p>
+          <ul>
+            <li>Перевірте, чи запущено демон: <span class="code-snippet">systemctl status bluetooth</span></li>
+            <li>Якщо пристрій не сканується, увімкніть експериментальний режим у <span class="code-snippet">/etc/bluetooth/main.conf</span>:<br>
+              У секції <span class="code-snippet">[General]</span> додайте <span class="code-snippet">Experimental = true</span> та перезапустіть: <span class="code-snippet">sudo systemctl restart bluetooth</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- 4. iOS / Safari Guide -->
+        <div class="troubleshoot-item" id="guideIos">
+          <h4>📱 4. Для пристроїв Apple iOS (iPhone / iPad)</h4>
+          <p>Мобільний Safari на iOS апаратно не підтримує Web Bluetooth. Встановіть з App Store безкоштовний браузер з підтримкою Bluetooth — <strong>Bluefy</strong> або <strong>WebBLE</strong>, і відкрийте сторінку в ньому.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection Card -->
+    <section class="card">
+      <div class="connection-bar">
+        <div class="status-indicator">
+          <div id="statusDot" class="status-dot"></div>
+          <div class="status-text">
+            <h3 id="statusTitle">Пристрій не підключено</h3>
+            <p id="statusSubtitle">Увімкніть Bluetooth та двічі натисніть кнопку на HTRAM</p>
+          </div>
+        </div>
+
+        <div class="device-meta" id="deviceMetaArea" style="display: none;">
+          <span class="device-meta-badge" id="badgeSku">SKU: --</span>
+          <span class="device-meta-badge" id="badgeFw">FW: --</span>
+          <span class="device-meta-badge" id="badgeBattery">🔋 --%</span>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button id="btnConnect" class="btn btn-primary">
+            <span>📡 Підключити HTRAM</span>
+          </button>
+          <button id="btnDisconnect" class="btn btn-outline btn-danger" style="display: none;">
+            <span>Відключити</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="connection-options">
+        <label class="checkbox-label" title="Увімкніть, якщо пристрій не відображається у стандартному списку фільтра">
+          <input type="checkbox" id="chkAcceptAll">
+          <span>Показати всі BLE пристрої (режим сумісності)</span>
+        </label>
+        <div class="connection-help-wrap">
+          <button id="btnToggleHelp" class="btn btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" type="button">
+            <span>❓ Інструкція з Bluetooth</span>
+          </button>
+          <span id="bleHint">Подвійний клік на HTRAM запускає блимання іконки Bluetooth</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Buzzer Control Card (Refined & Clean) -->
+    <section id="cardBuzzer" class="card card-buzzer">
+      <div class="buzzer-card-inner">
+        <div class="buzzer-meta">
+          <div class="buzzer-tag-wrap">
+            <span class="buzzer-tag">🔕 Швидке налаштування</span>
+          </div>
+          <h2>Керування зумером (Buzzer Mute)</h2>
+          <p>Вимкніть звуковий сигнал тривоги для комфортного тихого моніторингу повітря без пищання</p>
+        </div>
+
+        <div class="buzzer-action-box">
+          <div class="buzzer-status-badge">
+            <div id="buzzerIcon" class="buzzer-status-icon">🔊</div>
+            <div class="buzzer-status-info">
+              <h4 id="buzzerText">Статус зумера: невідомо</h4>
+              <p id="buzzerSubtext">Підключіть прилад для зчитування стану</p>
+            </div>
+          </div>
+
+          <button id="btnToggleBuzzer" class="btn btn-primary btn-buzzer-toggle" disabled>
+            <span>Вимкнути зумер</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Telemetry Grid -->
+    <section class="card">
+      <div class="section-title">
+        <span>📊 Моніторинг показників у реальному часі</span>
+        <span id="telemetryUpdateBadge" style="margin-left: auto; font-size: 0.75rem; font-weight: normal; color: var(--text-dim);">
+          Очікування даних...
+        </span>
+      </div>
+
+      <div class="grid-telemetry">
+        <!-- 1. CO2 Card -->
+        <div id="cardCo2" class="telemetry-card telemetry-card-co2">
+          <div class="telemetry-label">
+            <span>Вуглекислий газ (CO₂)</span>
+            <span id="co2StatusBadge" style="font-weight: 600;">--</span>
+          </div>
+          <div class="telemetry-value-wrap">
+            <span id="valCo2" class="telemetry-value">---</span>
+            <span class="telemetry-unit">ppm</span>
+          </div>
+          <div class="co2-bar">
+            <div id="barCo2" class="co2-bar-fill"></div>
+          </div>
+          <div class="telemetry-footer" id="co2FooterLegend" style="margin-top: 10px; color: var(--text-dim);">
+            <span>&lt;800 свіже</span> • <span>800–1000 увага</span> • <span>&gt;1000 тривога</span>
+          </div>
+        </div>
+
+        <!-- 2. Climate: Temperature & Humidity together -->
+        <div class="telemetry-card telemetry-card-climate">
+          <div class="telemetry-label">
+            <span>🌡 Клімат у приміщенні</span>
+            <span id="climateStatusBadge" style="font-weight: 500; font-size: 0.75rem; color: var(--text-muted);">Датчики T / RH</span>
+          </div>
+          
+          <div class="climate-dual-grid">
+            <!-- Temperature -->
+            <div class="climate-col">
+              <span class="climate-label">Температура</span>
+              <div class="telemetry-value-wrap compact">
+                <span id="valTemp" class="telemetry-value">--.-</span>
+                <span id="valTempUnit" class="telemetry-unit">°C</span>
+              </div>
+              <div class="telemetry-footer">
+                <span id="tempComfortStatus">Датчик температури</span>
+              </div>
+            </div>
+
+            <div class="climate-divider"></div>
+
+            <!-- Humidity -->
+            <div class="climate-col">
+              <span class="climate-label">Вологість</span>
+              <div class="telemetry-value-wrap compact">
+                <span id="valHumidity" class="telemetry-value">--</span>
+                <span class="telemetry-unit">%</span>
+              </div>
+              <div class="telemetry-footer">
+                <span id="humidityComfortStatus">Датчик вологості</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Battery: Dedicated standalone card -->
+        <div class="telemetry-card telemetry-card-battery">
+          <div class="telemetry-label">
+            <span>🔋 Живлення приладу</span>
+            <span id="chargingBadge" style="display: none; color: var(--accent-amber); font-weight: 600;">⚡ Заряджання</span>
+          </div>
+          <div class="telemetry-value-wrap">
+            <span id="valBatteryPercent" class="telemetry-value">--%</span>
+          </div>
+          <div class="battery-bars-wrap">
+            <div class="battery-bars" id="batterySegments">
+              <div class="battery-bar-segment"></div>
+              <div class="battery-bar-segment"></div>
+              <div class="battery-bar-segment"></div>
+              <div class="battery-bar-segment"></div>
+            </div>
+          </div>
+          <div class="telemetry-footer">
+            <span id="batteryStatusText">Статус акумулятора</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Telemetry History, Realtime Chart & CSV Export -->
+    <section class="card" id="sectionHistory">
+      <div class="section-title">
+        <span>📈 Історія вимірювань сесії</span>
+        <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+          <button id="btnExportCsv" class="btn btn-outline" style="padding: 6px 14px; font-size: 0.825rem;" disabled title="Вивантажити історію поточної сесії у файл CSV для Excel">
+            <span>📥 Експорт у CSV</span>
+          </button>
+          <button id="btnClearHistory" class="btn btn-outline" style="padding: 6px 10px; font-size: 0.825rem; color: var(--text-dim);" title="Очистити історію сесії">
+            <span>🗑</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Session Stats -->
+      <div class="history-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">Мінімум CO₂</span>
+          <span id="statMinCo2" class="stat-val">---</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Середній CO₂</span>
+          <span id="statAvgCo2" class="stat-val">---</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Максимум CO₂</span>
+          <span id="statMaxCo2" class="stat-val">---</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Зрізів даних</span>
+          <span id="statCount" class="stat-val">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Тривалість</span>
+          <span id="statDuration" class="stat-val">00:00</span>
+        </div>
+      </div>
+
+      <!-- Canvas Chart Container -->
+      <div class="chart-container">
+        <canvas id="historyChart" width="800" height="180"></canvas>
+        <div id="chartPlaceholder" class="chart-placeholder">
+          <span>Очікування перших показників від приладу для побудови графіка...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Device Configuration & Clock Sync -->
+    <section class="card">
+      <div class="section-title">
+        <span>⚙️ Налаштування приладу та синхронізація часу</span>
+      </div>
+
+      <div class="settings-grid">
+        <!-- Low CO2 Threshold -->
+        <div class="form-group">
+          <label for="inputAlarmLow">Початок попередження CO₂ (Low / Жовтий ppm):</label>
+          <input type="number" id="inputAlarmLow" class="form-input" min="400" max="2500" step="50" value="800" disabled>
+        </div>
+
+        <!-- High CO2 Threshold -->
+        <div class="form-group">
+          <label for="inputAlarmHigh">Поріг тривоги CO₂ (High / Червоний ppm):</label>
+          <input type="number" id="inputAlarmHigh" class="form-input" min="500" max="5000" step="50" value="1000" disabled>
+        </div>
+
+        <!-- Screen Timeout (Strictly 0 vs 120 supported by firmware) -->
+        <div class="form-group">
+          <label for="selectScreenOff">Автовимкнення екрана:</label>
+          <select id="selectScreenOff" class="form-select" disabled>
+            <option value="0">Завжди увімкнений (Always On)</option>
+            <option value="120">Автовимкнення через 2 хвилини (120 с)</option>
+          </select>
+        </div>
+
+        <!-- Device LCD Temp Unit -->
+        <div class="form-group">
+          <label for="selectDeviceTempUnit">Одиниця температури на екрані приладу:</label>
+          <select id="selectDeviceTempUnit" class="form-select" disabled>
+            <option value="C">Цельсій (°C)</option>
+            <option value="F">Фаренгейт (°F)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button id="btnSyncTime" class="btn btn-outline" disabled title="Встановити поточний час з годинника смартфона/ПК">
+          <span>⏱ Синхронізувати точний час</span>
+        </button>
+        <button id="btnSaveSettings" class="btn btn-primary" disabled>
+          <span>💾 Зберегти налаштування у прилад</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Technical BLE Protocol Console -->
+    <div class="console-drawer">
+      <div class="console-header" id="consoleToggle">
+        <span>📟 Журнал обміну пакетами BLE (Debug Console)</span>
+        <span id="consoleToggleIcon">▼</span>
+      </div>
+      <div class="console-content" id="consoleLog" style="display: none;">
+        <div class="console-entry console-info">
+          <span class="console-time">[--:--:--]</span>
+          <span>Очікування запуску сесії Bluetooth...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Monobank Donation Modal -->
+  <div id="donateModal" class="modal-backdrop">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h3 style="display: flex; align-items: center; gap: 8px;">🐱 Підтримати проєкт</h3>
+        <button class="modal-close" id="btnCloseDonate">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="mono-box">
+          <div style="font-size: 2.2rem; margin-bottom: 6px;">☕️</div>
+          <h4 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 4px;">Донат на банку в Monobank</h4>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Якщо цей застосунок допоміг вам позбутися пищання зумера та зручно слідкувати за повітрям — пригостіть розробника кавою!
+          </p>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <a id="btnGoToMono" href="https://send.monobank.ua/jar/25X35G6h2B" target="_blank" rel="noopener noreferrer" class="btn btn-mono" style="padding: 14px; font-size: 1.05rem;">
+            <span>🐱 Відкрити Банку в Monobank</span>
+          </a>
+
+          <div style="font-size: 0.8rem; color: var(--text-dim); text-align: center; margin-top: 4px;">
+            Дякуємо за використання українського софту! 🇺🇦
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Application Logic -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
